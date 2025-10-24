@@ -7,7 +7,8 @@ export function getGameId() {
     return params.get('gameId');
 }
 
-function getWeightMods(totalWeight, slideValue) {
+// MODIFIED: Added export to use this function in the wizard
+export function getWeightMods(totalWeight, slideValue) {
     let initialIndex = -1;
     GAME_MASTER_DATA.weightBonusTable.forEach((row, index) => {
         if (totalWeight >= row.range[0] && totalWeight <= row.range[1]) {
@@ -18,8 +19,9 @@ function getWeightMods(totalWeight, slideValue) {
     if (initialIndex === -1) {
         initialIndex = totalWeight < GAME_MASTER_DATA.weightBonusTable[0].range[0] ? 0 : GAME_MASTER_DATA.weightBonusTable.length - 1;
     }
-
-    const finalIndex = Math.max(0, initialIndex - slideValue);
+    
+    // Ensure the final index is within the bounds of the table array
+    const finalIndex = Math.max(0, Math.min(GAME_MASTER_DATA.weightBonusTable.length - 1, initialIndex - slideValue));
     const mods = GAME_MASTER_DATA.weightBonusTable[finalIndex];
 
     return {
@@ -28,6 +30,7 @@ function getWeightMods(totalWeight, slideValue) {
         moveEnMod: mods.moveEn
     };
 }
+
 
 /**
  * Calculates the SR cost for a given action from data objects, independent of the DOM.

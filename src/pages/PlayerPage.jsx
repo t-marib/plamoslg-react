@@ -1,38 +1,31 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { db, auth } from '../firebase/firebase.js';
-import { collection, query, where, onSnapshot, doc, getDocs, updateDoc, orderBy } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc, orderBy } from 'firebase/firestore';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { calculateAllFinalStats, calculateSrCostFromData } from '../utils/common.js';
+import { calculateAllFinalStats } from '../utils/common.js';
 import { GAME_MASTER_DATA } from '../data/gameData.js';
-
-// --- Common UI Components ---
+import ActionPlanPanel from '../components/ActionPlanPanel.jsx';
+import UnitCustomizationModal from '../components/UnitCustomizationModal.jsx';
 
 const AccordionItem = ({ title, titleChildren, children, defaultOpen = false }) => {
     const [isOpen, setIsOpen] = useState(defaultOpen);
     return (
         <div className="bg-gray-900 rounded-lg">
-            <button
-                className="w-full flex justify-between items-center text-left p-3 hover:bg-gray-800 rounded-lg transition"
-                onClick={() => setIsOpen(!isOpen)}
-            >
+            <button className="w-full flex justify-between items-center text-left p-3 hover:bg-gray-800 rounded-lg transition" onClick={() => setIsOpen(!isOpen)}>
                 {title}
                 <div className="flex items-center">
                     {titleChildren}
                     <svg className={`w-6 h-6 transform transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
                 </div>
             </button>
-            {isOpen && (
-                <div className="p-3 border-t border-gray-700">
-                    {children}
-                </div>
-            )}
+            {isOpen && <div className="p-3 border-t border-gray-700">{children}</div>}
         </div>
     );
 };
 
 const EquipmentTable = ({ equipmentList = [] }) => {
-    if (equipmentList.filter(e => e.name).length === 0) return <span className="text-xs text-gray-500">なし</span>;
+    if (!equipmentList || equipmentList.filter(e => e.name).length === 0) return <span className="text-xs text-gray-500">なし</span>;
     return (
         <table className="w-full text-xs border-collapse border border-gray-700 mt-1">
             <thead className="bg-gray-900">
@@ -46,7 +39,7 @@ const EquipmentTable = ({ equipmentList = [] }) => {
             </thead>
             <tbody>
                 {equipmentList.map((eq, index) => (
-                    eq.name ? (
+                    eq && eq.name ? (
                         <tr key={index} className={`border-t border-gray-700 ${eq.status === 'destroyed' ? 'text-gray-500 line-through bg-red-900/30' : ''}`}>
                             <td className="border-r border-gray-700 px-1 py-0.5 text-center">{index + 1}</td>
                             <td className="border-r border-gray-700 px-1 py-0.5">{eq.name}</td>
@@ -61,25 +54,24 @@ const EquipmentTable = ({ equipmentList = [] }) => {
     );
 };
 
-
-// --- PlayerDashboard Tab Panels ---
-
 const StatusPanel = ({ unit }) => {
-    const { finalStats, baseValues, parts, weapons, largeArmaments, types, hitLocationTable, forms } = unit;
-    const formatMod = (num) => (num >= 0 ? `+${num}` : num);
-    const movePerSr = Math.ceil(finalStats.move / 10);
+    const { finalStats, baseValues, parts, weapons, types, hitLocationTable, forms } = unit;
+    const movePerSr = Math.ceil((finalStats.move || 0) / 10);
 
     const activeFormIndex = unit.activeFormIndex || 0;
     const activeForm = (forms && forms[activeFormIndex]) ? forms[activeFormIndex] : { name: '通常形態', moveType: '全方向' };
-    let displayImageFileName = unit.imageFileName;
+    let displayImageFileName = (unit.forms && unit.forms[0]) ? unit.forms[0].imageFileName : unit.imageFileName;
     if (activeForm && activeForm.imageFileName && activeForm.imageFileName.trim() !== '') {
         displayImageFileName = activeForm.imageFileName;
     }
     const imageSrc = displayImageFileName ? `/images/${displayImageFileName}` : 'https://placehold.co/320x240/4B5563/9CA3AF?text=No+Image';
 
-    const sortedHitLocationTable = [...(hitLocationTable || GAME_MASTER_DATA.defaultHitLocationTable)].sort((a, b) => b.range[0] - a.range[0]);
+    const sortedHitLocationTable = [...(hitLocationTable || GAME_MASTER_DATA.defaultHitLocationTable)].filter(h => !h.isLargeArmament).sort((a, b) => b.range[0] - a.range[0]);
+    const largeArmamentParts = (hitLocationTable || []).filter(h => h.isLargeArmament);
+
 
     const PartAccordionItem = ({ partName, partData, hitLocation, isLargeArmament = false }) => {
+        if (!partData) return null;
         const isDestroyed = partData.hp <= 0;
         const hpPercentage = (partData.maxHp > 0) ? (partData.hp / partData.maxHp) * 100 : 0;
         let hpColorClass = 'text-green-400';
@@ -87,7 +79,7 @@ const StatusPanel = ({ unit }) => {
         else if (hpPercentage <= 25) hpColorClass = 'text-red-500';
         else if (hpPercentage <= 50) hpColorClass = 'text-yellow-400';
 
-        const d20Roll = hitLocation ? (hitLocation.range[0] === hitLocation.range[1] ? hitLocation.range[0] : `${hitLocation.range[1]}-${hitLocation.range[0]}`) : null;
+        const d20Roll = hitLocation && !isLargeArmament ? (hitLocation.range[0] === hitLocation.range[1] ? hitLocation.range[0] : `${hitLocation.range[1]}-${hitLocation.range[0]}`) : null;
 
         return (
             <AccordionItem
@@ -115,7 +107,7 @@ const StatusPanel = ({ unit }) => {
         const hitChance = (rangeBonus) => {
             if (rangeBonus === -999) return '-';
             const baseHit = base.category === '射撃' ? finalStats.baseShootingHit : finalStats.baseMeleeHit;
-            return `${baseHit + weapon.finalHit + rangeBonus}%`;
+            return `${baseHit + (weapon.finalHit || 0) + rangeBonus}%`;
         };
         
         let consumptionHtml = '';
@@ -176,8 +168,8 @@ const StatusPanel = ({ unit }) => {
                     {sortedHitLocationTable.map(hitLocation => <PartAccordionItem key={hitLocation.part} partName={hitLocation.part} partData={parts[hitLocation.part]} hitLocation={hitLocation} />)}
                 </div>
             </div>
-            {largeArmaments && largeArmaments.length > 0 && (
-                <div className="mt-4"><h2 className="text-xl font-bold p-3 text-yellow-300">大型武装</h2><div className="space-y-2">{largeArmaments.map((arm, index) => <PartAccordionItem key={index} partName={arm.name} partData={arm} isLargeArmament={true} />)}</div></div>
+            {largeArmamentParts.length > 0 && (
+                <div className="mt-4"><h2 className="text-xl font-bold p-3 text-yellow-300">大型武装</h2><div className="space-y-2">{largeArmamentParts.map((hitLocation) => <PartAccordionItem key={hitLocation.part} partName={hitLocation.part} partData={parts[hitLocation.part]} isLargeArmament={true} />)}</div></div>
             )}
             <div className="mt-4">
                 <h2 className="text-xl font-bold p-3">武装リスト</h2>
@@ -185,16 +177,6 @@ const StatusPanel = ({ unit }) => {
                     {weapons && weapons.filter(w => w.mountType !== 'unequipped').map((weapon, index) => <WeaponAccordionItem key={index} weapon={weapon} finalStats={finalStats} />)}
                 </div>
             </div>
-        </div>
-    );
-};
-
-const ActionPlanPanel = ({ unit, gameId }) => {
-    // ... (Implementation in next step)
-    return (
-        <div className="bg-gray-800 p-3 sm:p-6 rounded-lg shadow-lg">
-            <h3 className="text-xl font-bold mb-4 text-yellow-400">アクションプラン</h3>
-            <p className="text-gray-500">アクションプランは現在実装中です。</p>
         </div>
     );
 };
@@ -227,16 +209,9 @@ const CombatLogPanel = ({ gameId }) => {
     );
 };
 
-
-// --- Main Page Components ---
-
-const PlayerDashboard = ({ unit, gameId, user, onLeave }) => {
+const PlayerDashboard = ({ unit, gameId, onLeave }) => {
     const [activeTab, setActiveTab] = useState('status');
-    const tabs = [
-        { id: 'status', label: '機体ステータス' },
-        { id: 'action', label: 'アクションプラン' },
-        { id: 'log', label: '戦闘ログ' },
-    ];
+    const tabs = [{ id: 'status', label: '機体ステータス' }, { id: 'action', label: 'アクションプラン' }, { id: 'log', label: '戦闘ログ' }];
 
     const renderTabContent = () => {
         switch (activeTab) {
@@ -248,22 +223,8 @@ const PlayerDashboard = ({ unit, gameId, user, onLeave }) => {
     };
     return (
         <div>
-            <div className="mb-4">
-                <button onClick={onLeave} className="text-sm text-cyan-400 hover:text-cyan-200">&larr; 機体選択に戻る</button>
-            </div>
-            <div className="mb-4 border-b border-gray-700">
-                <nav className="-mb-px flex space-x-4" aria-label="Tabs">
-                    {tabs.map(tab => (
-                        <button
-                            key={tab.id}
-                            onClick={() => setActiveTab(tab.id)}
-                            className={`whitespace-nowrap py-3 px-2 border-b-2 font-medium text-sm ${activeTab === tab.id ? 'border-cyan-400 text-cyan-300' : 'border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-500'}`}
-                        >
-                            {tab.label}
-                        </button>
-                    ))}
-                </nav>
-            </div>
+            <div className="mb-4"><button onClick={onLeave} className="text-sm text-cyan-400 hover:text-cyan-200">&larr; 機体選択に戻る</button></div>
+            <div className="mb-4 border-b border-gray-700"><nav className="-mb-px flex space-x-4" aria-label="Tabs">{tabs.map(tab => (<button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`whitespace-nowrap py-3 px-2 border-b-2 font-medium text-sm ${activeTab === tab.id ? 'border-cyan-400 text-cyan-300' : 'border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-500'}`}>{tab.label}</button>))}</nav></div>
             <div>{renderTabContent()}</div>
         </div>
     );
@@ -274,74 +235,65 @@ const UnitSelection = ({ gameId, user, onUnitSelect }) => {
     const [units, setUnits] = useState([]);
     const [selectedTeam, setSelectedTeam] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [customizingUnit, setCustomizingUnit] = useState(null);
 
     useEffect(() => {
         const teamsRef = collection(db, 'plamo-slg', gameId, 'teams');
-        const unsubscribe = onSnapshot(teamsRef, (snapshot) => {
-            setTeams(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-            setLoading(false);
-        });
+        const unsubscribe = onSnapshot(teamsRef, (snapshot) => { setTeams(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))); setLoading(false); });
         return () => unsubscribe();
     }, [gameId]);
 
     useEffect(() => {
-        if (!selectedTeam) {
-            setUnits([]);
-            return;
-        };
+        if (!selectedTeam) { setUnits([]); return; };
         const unitsRef = collection(db, 'plamo-slg', gameId, 'units');
         const q = query(unitsRef, where('teamId', '==', selectedTeam.id));
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            setUnits(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(u => !u.playerId || u.playerId === ''));
-        });
+        const unsubscribe = onSnapshot(q, (snapshot) => { setUnits(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(u => !u.playerId || u.playerId === '')); });
         return () => unsubscribe();
     }, [selectedTeam, gameId]);
       
-    const handleJoin = async (unit) => {
-        const playerName = prompt("プレイヤー名を入力してください:", user.displayName || "");
-        if (playerName && user) {
-            const unitRef = doc(db, 'plamo-slg', gameId, 'units', unit.id);
-            await updateDoc(unitRef, { playerId: user.uid, player: playerName });
-            onUnitSelect(unit.id);
-        }
+    const handleUnitClick = (unit) => {
+        setCustomizingUnit(unit);
     };
 
     if (loading) return <p>チームを読み込み中...</p>;
 
-    if (!selectedTeam) {
-        return (
-            <div className="max-w-md mx-auto w-full">
-                <h2 className="text-2xl font-bold mb-4 text-indigo-400">参加するチームを選択</h2>
-                <div className="bg-gray-800 p-6 rounded-lg shadow-lg space-y-3">
-                    {teams.length > 0 ? teams.map(team => (
-                        <button key={team.id} onClick={() => setSelectedTeam(team)} className="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-3 px-4 rounded-md transition duration-300">{team.name}</button>
-                    )) : <p className="text-gray-400">現在参加可能なチームはありません。</p>}
-                </div>
-            </div>
-        );
-    }
-
     return (
-        <div className="max-w-lg mx-auto w-full">
-            <h2 className="text-2xl font-bold mb-4 text-blue-400">{selectedTeam.name}の機体を選択</h2>
-            <div className="mb-4">
-                <button onClick={() => setSelectedTeam(null)} className="text-sm text-cyan-400 hover:text-cyan-200">&larr; チーム選択に戻る</button>
-            </div>
-            <div className="bg-gray-800 p-6 rounded-lg shadow-lg space-y-3">
-                {units.length > 0 ? units.map(unit => {
-                    const imageSrc = unit.imageFileName ? `/images/${unit.imageFileName}` : 'https://placehold.co/80x80/4B5563/9CA3AF?text=N/A';
-                    return (
-                        <button key={unit.id} onClick={() => handleJoin(unit)} className="w-full bg-gray-700 hover:bg-gray-600 text-white p-3 rounded-md transition duration-300 flex items-center text-left">
-                            <img src={imageSrc} alt={unit.name} className="w-20 h-20 object-cover rounded-md mr-4" onError={(e) => { e.target.onerror = null; e.target.src = 'https://placehold.co/80x80/4B5563/9CA3AF?text=N/A'; }}/>
-                            <div>
-                                <div className="font-bold text-lg">{unit.name}</div>
-                                <div className="text-xs text-gray-400">ビルダー: {unit.builder || 'N/A'}</div>
-                            </div>
-                        </button>
-                    )
-                }) : <p className="text-gray-400">現在選択可能な機体はありません。</p>}
-            </div>
-        </div>
+        <>
+            {selectedTeam ? (
+                <div className="max-w-lg mx-auto w-full">
+                    <h2 className="text-2xl font-bold mb-4 text-blue-400">{selectedTeam.name}の機体を選択</h2>
+                    <div className="mb-4"><button onClick={() => setSelectedTeam(null)} className="text-sm text-cyan-400 hover:text-cyan-200">&larr; チーム選択に戻る</button></div>
+                    <div className="bg-gray-800 p-6 rounded-lg shadow-lg space-y-3">
+                        {units.length > 0 ? units.map(unit => {
+                            let imageSrc = 'https://placehold.co/80x80/4B5563/9CA3AF?text=N/A';
+                            const formImage = unit.forms?.[0]?.imageFileName;
+                            if(formImage) {
+                                imageSrc = `/images/${formImage}`;
+                            } else if (unit.imageFileName) {
+                                imageSrc = `/images/${unit.imageFileName}`;
+                            }
+                            return (<button key={unit.id} onClick={() => handleUnitClick(unit)} className="w-full bg-gray-700 hover:bg-gray-600 text-white p-3 rounded-md transition duration-300 flex items-center text-left"><img src={imageSrc} alt={unit.name} className="w-20 h-20 object-cover rounded-md mr-4" onError={(e) => { e.target.onerror = null; e.target.src = 'https://placehold.co/80x80/4B5563/9CA3AF?text=N/A'; }}/><div className="flex-grow"><div className="font-bold text-lg">{unit.name}</div><div className="text-xs text-gray-400">ビルダー: {unit.builder || 'N/A'}</div></div></button>)
+                        }) : <p className="text-gray-400">現在選択可能な機体はありません。</p>}
+                    </div>
+                </div>
+            ) : (
+                <div className="max-w-md mx-auto w-full">
+                    <h2 className="text-2xl font-bold mb-4 text-indigo-400">参加するチームを選択</h2>
+                    <div className="bg-gray-800 p-6 rounded-lg shadow-lg space-y-3">
+                        {teams.length > 0 ? teams.map(team => (<button key={team.id} onClick={() => setSelectedTeam(team)} className="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-3 px-4 rounded-md transition duration-300">{team.name}</button>)) : <p className="text-gray-400">現在参加可能なチームはありません。</p>}
+                    </div>
+                </div>
+            )}
+            
+            {customizingUnit && <UnitCustomizationModal 
+                isOpen={!!customizingUnit}
+                onClose={() => setCustomizingUnit(null)}
+                unit={customizingUnit}
+                gameId={gameId}
+                user={user}
+                onJoin={onUnitSelect}
+            />}
+        </>
     );
 };
 
@@ -363,25 +315,33 @@ function PlayerPage() {
 
     useEffect(() => {
         if (!user || !gameId) return;
+        setLoading(true);
         const unitsRef = collection(db, 'plamo-slg', gameId, 'units');
         const q = query(unitsRef, where('playerId', '==', user.uid));
         const unsubscribe = onSnapshot(q, (snapshot) => {
-            if (!snapshot.empty) setSelectedUnitId(snapshot.docs[0].id);
-            else setSelectedUnitId(null);
+            if (!snapshot.empty) {
+                setSelectedUnitId(snapshot.docs[0].id);
+            } else {
+                setSelectedUnitId(null);
+            }
             setLoading(false);
-        }, () => setError("機体情報の確認に失敗しました。"));
+        }, () => { setError("機体情報の確認に失敗しました。"); setLoading(false); });
         return () => unsubscribe();
     }, [user, gameId]);
 
     useEffect(() => {
-        if (!selectedUnitId || !gameId) {
-            setUnitData(null);
-            return;
-        };
+        if (!selectedUnitId || !gameId) { setUnitData(null); return; };
         const unitRef = doc(db, 'plamo-slg', gameId, 'units', selectedUnitId);
         const unsubscribe = onSnapshot(unitRef, (doc) => {
-            if (doc.exists()) setUnitData(calculateAllFinalStats({ id: doc.id, ...doc.data() }));
-            else setSelectedUnitId(null);
+            if (doc.exists()) {
+                const data = doc.data();
+                if (!data.actionPlan) {
+                    data.actionPlan = {};
+                    for(let i = 1; i <= 10; i++) { data.actionPlan[i] = { action: '---', funnelActions: {} }; }
+                }
+                setUnitData(calculateAllFinalStats({ id: doc.id, ...data }));
+            }
+            else { setSelectedUnitId(null); }
         });
         return () => unsubscribe();
     }, [selectedUnitId, gameId]);
@@ -394,21 +354,18 @@ function PlayerPage() {
             try {
                 const unitRef = doc(db, 'plamo-slg', gameId, 'units', selectedUnitId);
                 await updateDoc(unitRef, { playerId: '', player: '' });
-            } catch (err) {
-                alert("機体選択画面への復帰に失敗しました。");
-            }
+            } catch (err) { alert("機体選択画面への復帰に失敗しました。"); }
         }
     };
 
-    if (loading) return <p className="text-center">読み込み中...</p>;
+    if (loading || !user) return <p className="text-center">読み込み中...</p>;
     if (error) return <p className="text-red-500 text-center">{error}</p>;
 
     if (unitData) {
-        return <PlayerDashboard unit={unitData} gameId={gameId} user={user} onLeave={handleLeave} />;
+        return <PlayerDashboard unit={unitData} gameId={gameId} onLeave={handleLeave} />;
     } else {
         return <UnitSelection gameId={gameId} user={user} onUnitSelect={handleUnitSelect} />;
     }
 }
 
 export default PlayerPage;
-
